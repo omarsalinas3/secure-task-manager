@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  backend:
+    name: Backend (tests, migrations, dependencies)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_DB: task_manager_test
+          POSTGRES_USER: app_user
+          POSTGRES_PASSWORD: ci_only_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app_user -d task_manager_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://app_user:ci_only_password@localhost:5432/task_manager_test
+      SHADOW_DATABASE_URL: postgresql://app_user:ci_only_password@localhost:5432/task_manager_shadow
+      CORS_ORIGINS: http://localhost:3000
+      PUSH_PROVIDER: none
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate throwaway JWT secrets for this run
+        run: |
+          echo "JWT_ACCESS_SECRET=$(openssl rand -base64 48)" >> "$GITHUB_ENV"
+          echo "JWT_REFRESH_SECRET=$(openssl rand -base64 48)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Dependency audit (fail on high or critical)
+        run: npm audit --audit-level=high
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
+      - name: Check migrations match schema.prisma
+        run: |
+          PGPASSWORD=ci_only_password psql -h localhost -U app_user -d task_manager_test \
+            -c 'CREATE DATABASE task_manager_shadow;'
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "$SHADOW_DATABASE_URL" \
+            --exit-code
+      - name: Validate OpenAPI contract
+        run: npx --yes @redocly/cli@1 lint openapi.yaml --skip-rule operation-4xx-response --skip-rule security-defined --skip-rule info-license
+      - run: npm test
+
+  mobile:
+    name: Flutter (analyze, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - run: flutter test

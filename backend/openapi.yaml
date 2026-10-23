@@ -1,0 +1,506 @@
+openapi: 3.0.3
+info:
+  title: Task Manager API
+  version: 1.0.0
+  description: >
+    Versioned REST API for the Secure Task Manager. Every task operation is scoped to the
+    user identified by the verified access token; client-supplied user IDs are ignored.
+servers:
+  - url: https://api.example.com/api/v1
+  - url: http://localhost:3000/api/v1
+    description: Local development only
+tags:
+  - name: auth
+  - name: account
+  - name: tasks
+  - name: admin
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register an account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        "201": { $ref: '#/components/responses/TokenPair' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "409": { $ref: '#/components/responses/Error' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Sign in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        "200": { $ref: '#/components/responses/TokenPair' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate a refresh token
+      description: >
+        Returns a new pair and revokes the presented token. Presenting a token that was
+        already rotated revokes its whole family and returns 401.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        "200": { $ref: '#/components/responses/TokenPair' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the refresh-token family of this token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        "204": { description: Signed out }
+        "400": { $ref: '#/components/responses/ValidationError' }
+
+  /auth/logout-all:
+    post:
+      tags: [auth]
+      summary: Revoke every refresh token of the current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: All sessions signed out }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/me:
+    get:
+      tags: [account]
+      summary: Current user's profile
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/change-password:
+    post:
+      tags: [account]
+      summary: Change password and revoke all sessions
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        "200": { $ref: '#/components/responses/TokenPair' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/account:
+    delete:
+      tags: [account]
+      summary: Permanently delete the account
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, maxLength: 128 }
+      responses:
+        "204": { description: "Account, tasks, sessions, and devices deleted" }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/sessions:
+    get:
+      tags: [account]
+      summary: List active sessions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+    delete:
+      tags: [account]
+      summary: Sign out every session except the current one
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Other sessions revoked }
+
+  /auth/sessions/{sessionId}:
+    delete:
+      tags: [account]
+      summary: Revoke one session
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Session revoked }
+        "404": { $ref: '#/components/responses/Error' }
+
+  /auth/audit:
+    get:
+      tags: [account]
+      summary: The current user's recent security events
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEvent' }
+
+  /auth/devices:
+    get:
+      tags: [account]
+      summary: List push-notification devices (tokens are never returned)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Devices }
+    post:
+      tags: [account]
+      summary: Register a push-notification device
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeviceRequest' }
+      responses:
+        "201": { description: Device registered }
+
+  /auth/devices/unregister:
+    post:
+      tags: [account]
+      summary: Remove one of the user's push-notification devices
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pushToken]
+              properties:
+                pushToken: { type: string }
+      responses:
+        "204": { description: Device removed }
+
+  /tasks:
+    get:
+      tags: [tasks]
+      summary: List the current user's tasks
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - in: query
+          name: cursor
+          description: ID of the last task of the previous page; enables stable cursor paging.
+          schema: { type: string }
+        - in: query
+          name: q
+          description: Case-insensitive search in title and description.
+          schema: { type: string, maxLength: 100 }
+        - in: query
+          name: status
+          schema: { type: string, enum: [all, pending, completed], default: all }
+      responses:
+        "200":
+          description: Current user's paginated tasks
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskPage' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [tasks]
+      summary: Create a task
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTaskRequest' }
+      responses:
+        "201": { $ref: '#/components/responses/TaskItem' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "401": { $ref: '#/components/responses/Unauthenticated' }
+
+  /tasks/{taskId}:
+    parameters:
+      - in: path
+        name: taskId
+        required: true
+        schema: { type: string, pattern: '^c[a-z0-9]{20,30}$' }
+    get:
+      tags: [tasks]
+      summary: Get one of the current user's tasks
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { $ref: '#/components/responses/TaskItem' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "404": { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [tasks]
+      summary: Update one of the current user's tasks
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTaskRequest' }
+      responses:
+        "200": { $ref: '#/components/responses/TaskItem' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "404": { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [tasks]
+      summary: Delete one of the current user's tasks
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Task deleted }
+        "404": { $ref: '#/components/responses/Error' }
+
+  /admin/users:
+    get:
+      tags: [admin]
+      summary: List users (ADMIN role only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200": { description: Users with task counts }
+        "403": { $ref: '#/components/responses/Error' }
+
+  /admin/users/{userId}/role:
+    patch:
+      tags: [admin]
+      summary: Change another user's role (ADMIN role only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: userId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [USER, ADMIN] }
+      responses:
+        "200": { description: Updated user }
+        "400": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+
+  /admin/audit:
+    get:
+      tags: [admin]
+      summary: Recent audit events (ADMIN role only)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: action, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200": { description: Audit events }
+        "403": { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12, maxLength: 128 }
+        deviceName: { type: string, maxLength: 60 }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, maxLength: 128 }
+        deviceName: { type: string, maxLength: 60 }
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string, minLength: 20, maxLength: 200 }
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string }
+        newPassword: { type: string, minLength: 12, maxLength: 128 }
+    DeviceRequest:
+      type: object
+      required: [pushToken, platform]
+      properties:
+        pushToken: { type: string }
+        platform: { type: string, enum: [android, ios, web] }
+    TokenPair:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        expiresIn: { type: integer, example: 600 }
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [USER, ADMIN] }
+        createdAt: { type: string, format: date-time }
+    Session:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        deviceName: { type: string, nullable: true }
+        signedInAt: { type: string, format: date-time }
+        lastRefreshedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        current: { type: boolean }
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string, nullable: true }
+        action: { type: string }
+        outcome: { type: string, enum: [success, failure] }
+        createdAt: { type: string, format: date-time }
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        ownerId: { type: string }
+        title: { type: string, maxLength: 120 }
+        description: { type: string, nullable: true, maxLength: 2000 }
+        completed: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TaskPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Task' }
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        hasMore: { type: boolean }
+        nextCursor: { type: string, nullable: true }
+    CreateTaskRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+    UpdateTaskRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, nullable: true, maxLength: 2000 }
+        completed: { type: boolean }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+  responses:
+    TokenPair:
+      description: Access and refresh tokens
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TokenPair' }
+    TaskItem:
+      description: A task
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              item: { $ref: '#/components/schemas/Task' }
+    Error:
+      description: Safe error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationError:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthenticated:
+      description: Missing, invalid, or expired credentials
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

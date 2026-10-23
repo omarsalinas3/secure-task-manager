@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: task_manager
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: local_dev_only_change_me
+    ports:
+      # Host port is configurable because a native PostgreSQL may already use 5432.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - task_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d task_manager"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  task_data:
