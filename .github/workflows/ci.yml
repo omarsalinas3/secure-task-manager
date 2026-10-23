@@ -17,7 +17,7 @@ jobs:
     name: Secret scanning
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
@@ -48,7 +48,7 @@ jobs:
       CORS_ORIGINS: http://localhost:3000
       PUSH_PROVIDER: none
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Generate throwaway JWT secrets for this run
         run: |
           echo "JWT_ACCESS_SECRET=$(openssl rand -base64 48)" >> "$GITHUB_ENV"
@@ -83,7 +83,7 @@ jobs:
       run:
         working-directory: mobile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
